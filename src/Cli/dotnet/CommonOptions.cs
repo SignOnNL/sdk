@@ -1,16 +1,16 @@
 // Copyright (c) .NET Foundation and contributors. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-using System;
-using Microsoft.DotNet.Tools;
-using System.CommandLine;
-using System.IO;
-using Microsoft.DotNet.Tools.Common;
-using System.Collections.Generic;
-using System.Linq;
 using Microsoft.DotNet.Cli.Utils;
+using Microsoft.DotNet.Tools;
+using Microsoft.DotNet.Tools.Common;
+using System;
+using System.Collections.Generic;
+using System.CommandLine;
+using System.CommandLine.Completions;
 using System.CommandLine.Parsing;
-using System.CommandLine.Suggestions;
+using System.IO;
+using System.Linq;
 
 namespace Microsoft.DotNet.Cli
 {
@@ -22,7 +22,7 @@ namespace Microsoft.DotNet.Cli
                 IsHidden = true
             }.ForwardAsProperty()
             .AllowSingleArgPerToken();
-
+            
         public static Option<VerbosityOptions> VerbosityOption =
             new ForwardedOption<VerbosityOptions>(
                 new string[] { "-v", "--verbosity" },
@@ -31,7 +31,7 @@ namespace Microsoft.DotNet.Cli
                     ArgumentHelpName = CommonLocalizableStrings.LevelArgumentName
                 }.ForwardAsSingle(o => $"-verbosity:{o}");
 
-        public static Option<VerbosityOptions> HiddenVerbosityOption =>
+        public static Option<VerbosityOptions> HiddenVerbosityOption =
             new ForwardedOption<VerbosityOptions>(
                 new string[] { "-v", "--verbosity" },
                 description: CommonLocalizableStrings.VerbosityOptionDescription)
@@ -48,11 +48,11 @@ namespace Microsoft.DotNet.Cli
                 ArgumentHelpName = CommonLocalizableStrings.FrameworkArgumentName
                     
             }.ForwardAsSingle(o => $"-property:TargetFramework={o}")
-            .AddSuggestions(Suggest.TargetFrameworksFromProjectFile());
+            .AddCompletions(Complete.TargetFrameworksFromProjectFile);
 
         private static string RuntimeArgName = CommonLocalizableStrings.RuntimeIdentifierArgumentName;
         private static Func<string, IEnumerable<string>> RuntimeArgFunc = o => new string[] { $"-property:RuntimeIdentifier={o}", "-property:_CommandLineDefinedRuntimeIdentifier=true" };
-        private static SuggestDelegate RuntimeSuggestions = Suggest.RunTimesFromProjectFile();
+        private static CompletionDelegate RuntimeCompletions = Complete.RunTimesFromProjectFile;
         
         public static Option<string> RuntimeOption = 
             new ForwardedOption<string>(
@@ -60,7 +60,7 @@ namespace Microsoft.DotNet.Cli
             {
                 ArgumentHelpName = RuntimeArgName
             }.ForwardAsMany(RuntimeArgFunc)
-            .AddSuggestions(RuntimeSuggestions);
+            .AddCompletions(RuntimeCompletions);
 
         public static Option<string> LongFormRuntimeOption =
             new ForwardedOption<string>(
@@ -68,7 +68,7 @@ namespace Microsoft.DotNet.Cli
             {
                 ArgumentHelpName = RuntimeArgName
             }.ForwardAsMany(RuntimeArgFunc)
-            .AddSuggestions(RuntimeSuggestions);
+            .AddCompletions(RuntimeCompletions);
 
         public static Option<bool> CurrentRuntimeOption(string description) =>
             new ForwardedOption<bool>("--use-current-runtime", description)
@@ -81,7 +81,7 @@ namespace Microsoft.DotNet.Cli
             {
                 ArgumentHelpName = CommonLocalizableStrings.ConfigurationArgumentName
             }.ForwardAsSingle(o => $"-property:Configuration={o}")
-            .AddSuggestions(Suggest.ConfigurationsFromProjectFileOrDefaults());
+            .AddCompletions(Complete.ConfigurationsFromProjectFileOrDefaults);
 
         public static Option<string> VersionSuffixOption =
             new ForwardedOption<string>(
@@ -230,13 +230,25 @@ namespace Microsoft.DotNet.Cli
             return $"{os}-{arch}";
         }
 
+        public static string GetDotnetExeDirectory()
+        {
+            // Alternatively we could use Microsoft.DotNet.NativeWrapper.EnvironmentProvider.GetDotnetExeDirectory here
+            //  (while injecting env resolver so that DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR is being returned as null)
+            // However - it first looks on PATH - which can be problematic in environment (e.g. dev) where we have installed and xcopy dotnet versions
+
+            var dotnetRootPath = Path.GetDirectoryName(Environment.ProcessPath);
+            // When running under test the path does not always contain "dotnet".
+			// The sdk folder is /d/ when run on helix because of space issues
+            dotnetRootPath = Path.GetFileName(dotnetRootPath).Contains("dotnet") || Path.GetFileName(dotnetRootPath).Contains("x64") || Path.GetFileName(dotnetRootPath).Equals("d") ? dotnetRootPath : Path.Combine(dotnetRootPath, "dotnet");
+            return dotnetRootPath;
+        }
+
         public static string GetCurrentRuntimeId()
         {
-            var dotnetRootPath = Path.GetDirectoryName(Environment.ProcessPath);
-            // When running under test the path does not always contain "dotnet" and Product.Version is empty.
-            dotnetRootPath = Path.GetFileName(dotnetRootPath).Contains("dotnet") || Path.GetFileName(dotnetRootPath).Contains("x64") ? dotnetRootPath : Path.Combine(dotnetRootPath, "dotnet");
+            var dotnetRootPath = GetDotnetExeDirectory();
             var ridFileName = "NETCoreSdkRuntimeIdentifierChain.txt";
-            string runtimeIdentifierChainPath = string.IsNullOrEmpty(Product.Version) ?
+            // When running under test the Product.Version might be empty or point to version not installed in dotnetRootPath.
+            string runtimeIdentifierChainPath = string.IsNullOrEmpty(Product.Version) || !Directory.Exists(Path.Combine(dotnetRootPath, "sdk", Product.Version)) ?
                 Path.Combine(Directory.GetDirectories(Path.Combine(dotnetRootPath, "sdk"))[0], ridFileName) :
                 Path.Combine(dotnetRootPath, "sdk", Product.Version, ridFileName);
             string[] currentRuntimeIdentifiers = File.Exists(runtimeIdentifierChainPath) ?
